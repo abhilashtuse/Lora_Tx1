@@ -1,3 +1,11 @@
+#ifndef TX1_LORA_H_
+#define TX1_LORA_H_
+
+
+
+
+#include <stddef.h>
+#include <stdint.h>
 // registers
 
 #define REG_FIFO                 0x00
@@ -97,3 +105,49 @@
 #define function_not_required 0
 
 
+  int LoRabegin(long frequency);
+  int LoRabeginPacket(int implicitHeader);
+  int LoRaendPacket();
+
+  int parsePacket(int size );
+  int packetRssi();
+  float packetSnr();
+
+  // from Print
+  size_t writebyte(uint8_t byte);
+  size_t lora_write(const uint8_t *buffer, size_t size);
+
+  // from Stream
+  int available();
+  int lora_read();
+  int peek();
+  void flush();
+
+  void onReceive(void(*callback)(int));
+
+  void receive(int size);
+  void idle();
+  void lora_sleep();
+
+  void setTxPower(int level);
+  void setFrequency(long frequency);
+  void setSpreadingFactor(int sf);
+  void setSignalBandwidth(long sbw);
+  void setCodingRate4(int denominator);
+  void setPreambleLength(long length);
+  void setSyncWord(int sw);
+  void crc();
+  void noCrc();
+
+ // void dumpRegisters(Stream& out);
+  uint8_t readRegister(uint8_t address);
+
+  void explicitHeaderMode();
+  void implicitHeaderMode();
+
+  void writeRegister(uint8_t address, uint8_t value);
+  uint8_t singleTransfer(uint8_t address, uint8_t value);
+
+  void finish();
+
+#endif /* TX1_LORA_H_ */

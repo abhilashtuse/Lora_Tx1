@@ -34,8 +34,12 @@ static uint16_t delay;
 int fd = -1;
 int _frequency=0;
 
-jetsonTX1GPIONumber gpio_cs = gpio187 ;
-jetsonTX1GPIONumber gpio_lora = gpio219 ;     // Output
+int _packetIndex=0;
+int _implicitHeaderMode=0;
+char receiveLora=0;
+
+jetsonTX1GPIONumber lora_cs = gpio187 ;
+jetsonTX1GPIONumber lora_reset = gpio219 ;     // Output
 
 void SPI_Init(void)
 {
@@ -116,13 +120,13 @@ uint8_t singleTransfer(uint8_t address, uint8_t value)
   uint8_t response=0;
 
   //digitalWrite(_ss, LOW);
-  gpioSetValue(gpio_cs, off);  //CHIP_SELECT();
+  gpioSetValue(lora_cs, off);  //CHIP_SELECT();
   //SPI.beginTransaction(_spiSettings);
   response = spi_transfer(address);
   // printf("address response %x\n",response);
   response = spi_transfer(value);
   // printf("value response %x\n",response);
-  gpioSetValue(gpio_cs, on);   //CHIP_DESELECT();
+  gpioSetValue(lora_cs, on);   //CHIP_DESELECT();
 
   //digitalWrite(_ss, HIGH);
 
@@ -182,23 +186,23 @@ int LoRabegin(long frequency)
   uint8_t version =0;
 
   // Initialize GPIO for resetting LORA 
-  gpioExport(gpio_lora) ;
-  gpioSetDirection(gpio_lora,outputPin) ;
+  gpioExport(lora_reset) ;
+  gpioSetDirection(lora_reset,outputPin) ;
   
   // Initialize GPIO for chip select
 
-  gpioExport(gpio_cs) ;
-  gpioSetDirection(gpio_cs,outputPin) ;
+  gpioExport(lora_cs) ;
+  gpioSetDirection(lora_cs,outputPin) ;
 
   // perform reset
 
-  gpioSetValue(gpio_lora, off);
+  gpioSetValue(lora_reset, off);
   for(i=0;i<100000;i++);
-  gpioSetValue(gpio_lora, on);
+  gpioSetValue(lora_reset, on);
   for(i=0;i<10000000;i++);
 
   // set SS high
-  gpioSetValue(gpio_cs, on); //CHIP_DESELECT();
+  gpioSetValue(lora_cs, on); //CHIP_DESELECT();
  
   SPI_Init();
 
@@ -217,17 +221,200 @@ int LoRabegin(long frequency)
   // set frequency
   setFrequency(frequency);
 
-  close(fd);
+  // set base addresses
+  writeRegister(REG_FIFO_TX_BASE_ADDR, 0);
+  writeRegister(REG_FIFO_RX_BASE_ADDR, 0);
+
+  // set LNA boost
+  writeRegister(REG_LNA, readRegister(REG_LNA) | 0x03);
+
+  // set output power to 17 dBm
+  setTxPower(17);
+
+  // put in standby mode
+  idle();
+
   return 1;
 }
 
-int main(int argc, char *argv[])
+void explicitHeaderMode()
 {
-    LoRabegin(915000000);
+  _implicitHeaderMode = 0;
 
-    gpioUnexport(gpio_cs) ;
-    gpioUnexport(gpio_lora) ;
-    return 0;
+  writeRegister(REG_MODEM_CONFIG_1, readRegister(REG_MODEM_CONFIG_1) & 0xfe);
+}
+
+void implicitHeaderMode()
+{
+  _implicitHeaderMode = 1;
+
+  writeRegister(REG_MODEM_CONFIG_1, readRegister(REG_MODEM_CONFIG_1) | 0x01);
+}
+
+int LoRabeginPacket(int implicitHeader)
+{
+  // put in standby mode
+  idle();
+
+  if (implicitHeader)
+  {
+    implicitHeaderMode();
+  }
+  else {
+
+    explicitHeaderMode();
+  }
+
+  // reset FIFO address and paload length
+  writeRegister(REG_FIFO_ADDR_PTR, 0);
+  writeRegister(REG_PAYLOAD_LENGTH, 0);
+
+  return 1;
+}
+
+int LoRaendPacket()
+{
+	// put in TX mode
+  writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_TX);
+
+  // wait for TX done
+   while((readRegister(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) == 0);
+
+  // clear IRQ's
+  writeRegister(REG_IRQ_FLAGS, IRQ_TX_DONE_MASK);
+
+  return 1;
+}
+
+int parsePacket(int size)
+{
+	int packetLength = 0;
+	int irqFlags = readRegister(REG_IRQ_FLAGS);
+
+	if (size > 0)
+	{
+		implicitHeaderMode();
+		writeRegister(REG_PAYLOAD_LENGTH, size & 0xff);
+	}
+	else
+	{
+		explicitHeaderMode();
+	}
+
+	// clear IRQ's
+	writeRegister(REG_IRQ_FLAGS, irqFlags);
+
+	if ((irqFlags & IRQ_RX_DONE_MASK) && (irqFlags & IRQ_PAYLOAD_CRC_ERROR_MASK) == 0)
+	{
+		// received a packet
+		_packetIndex = 0;
+
+		// read packet length
+		if (_implicitHeaderMode)
+		{
+			packetLength = readRegister(REG_PAYLOAD_LENGTH);
+		}
+		else
+		{
+			packetLength = readRegister(REG_RX_NB_BYTES);
+		}
+
+		// set FIFO address to current RX address
+		writeRegister(REG_FIFO_ADDR_PTR, readRegister(REG_FIFO_RX_CURRENT_ADDR));
+
+		// put in standby mode
+		idle();
+	}
+	else if (readRegister(REG_OP_MODE) != (MODE_LONG_RANGE_MODE | MODE_RX_SINGLE))
+	{
+		// not currently in RX mode
+
+		// reset FIFO address
+		writeRegister(REG_FIFO_ADDR_PTR, 0);
+
+		// put in single RX mode
+		writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_RX_SINGLE);
+	}
+
+	return packetLength;
+}
+
+int packetRssi()
+{
+	return (readRegister(REG_PKT_RSSI_VALUE) - (_frequency < 868E6 ? 164 : 157));
+}
+
+float packetSnr()
+{
+	return ((int8_t)readRegister(REG_PKT_SNR_VALUE)) * 0.25;
+}
+
+size_t lora_write(const uint8_t *buffer, size_t size)
+{
+	int currentLength = readRegister(REG_PAYLOAD_LENGTH);
+	size_t i=0;
+	// check size
+	if ((currentLength + size) > MAX_PKT_LENGTH)
+	{
+		size = MAX_PKT_LENGTH - currentLength;
+	}
+
+	// write data
+	for (i = 0; i < size; i++)
+	{
+		writeRegister(REG_FIFO, buffer[i]);
+	}
+
+	// update length
+	writeRegister(REG_PAYLOAD_LENGTH, currentLength + size);
+
+	return size;
+}
+
+size_t writebyte(uint8_t byte)
+{
+	return lora_write(&byte, sizeof(byte));
+}
+
+int available()
+{
+	return (readRegister(REG_RX_NB_BYTES) - _packetIndex);
+}
+
+int lora_read()
+{
+	if (!available()) {
+		return -1;
+	}
+
+	_packetIndex++;
+
+	return readRegister(REG_FIFO);
+}
+
+int peek()
+{
+	if (!available()) {
+		return -1;
+	}
+
+	// store current FIFO address
+	int currentAddress = readRegister(REG_FIFO_ADDR_PTR);
+
+	// read
+	uint8_t b = readRegister(REG_FIFO);
+
+	// restore FIFO address
+	writeRegister(REG_FIFO_ADDR_PTR, currentAddress);
+
+	return b;
+}
+
+void finish()
+{
+    close(fd);
+    gpioUnexport(lora_cs) ;
+    gpioUnexport(lora_reset) ;
 }
 
 
