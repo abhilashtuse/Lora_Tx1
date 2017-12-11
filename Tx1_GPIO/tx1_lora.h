@@ -7,6 +7,22 @@
 #include <stddef.h>
 #include <stdint.h>
 // registers
+#define REG_HOP_PERIOD		 0x24
+#define REG_HOP_CHANNEL		 0x1c
+
+#define REG_BITRATE_MSB		 0x02
+
+#define REG_BITRATE_LSB		 0x03
+		
+#define REG_SYNC_CFG		 0x27
+
+#define REG_NODE_ADRS		 0x33
+
+#define REG_BROADCAST_ADDR	 0x34
+
+#define REG_PKT_CFG1		 0x30
+
+#define REG_PKT_CFG2		 0x31
 
 #define REG_FIFO                 0x00
 
@@ -76,7 +92,9 @@
 
 #define MODE_RX_SINGLE           0x06
 
+#define ADDR_FILTER_MODE1	 0x01
 
+#define ADDR_FILTER_MODE2	 0x02
 
 // PA config
 
@@ -91,6 +109,9 @@
 #define IRQ_PAYLOAD_CRC_ERROR_MASK 0x20
 
 #define IRQ_RX_DONE_MASK           0x40
+
+#define IRQ_FHSS_CHANNEL_CHANGE    (1 << 1)
+#define FHSS_PRESENT_CHANNEL 	   0x3F
 
 
 
@@ -109,6 +130,8 @@
   int LoRabeginPacket(int implicitHeader);
   int LoRaendPacket();
 
+  void setNodeAddress(uint8_t addr);
+  void setBroadCastAddress(uint8_t addr);
   int parsePacket(int size );
   int packetRssi();
   float packetSnr();
@@ -136,8 +159,10 @@
   void setCodingRate4(int denominator);
   void setPreambleLength(long length);
   void setSyncWord(int sw);
-  void crc();
+  void lora_mode_crc_enable();
+  void fsk_mode_crc_enable();
   void noCrc();
+  void enableScrambling();
 
  // void dumpRegisters(Stream& out);
   uint8_t readRegister(uint8_t address);
@@ -149,5 +174,8 @@
   uint8_t singleTransfer(uint8_t address, uint8_t value);
 
   void finish();
+  int set_freq_hop_period(uint8_t freq_hop_period);
+  uint8_t get_fhss_present_channel(void);
+  int check_fhss_channel_change(long freq);
 
 #endif /* TX1_LORA_H_ */

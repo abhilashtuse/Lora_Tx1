@@ -41,6 +41,17 @@ char receiveLora=0;
 jetsonTX1GPIONumber lora_cs = gpio187 ;
 jetsonTX1GPIONumber lora_reset = gpio219 ;     // Output
 
+void setNodeAddress(uint8_t addr)
+{
+	writeRegister(REG_PKT_CFG1, readRegister(REG_PKT_CFG1) | ADDR_FILTER_MODE2 << 1); //Set address filtering
+	writeRegister(REG_NODE_ADRS, addr); //Set node address
+}
+
+void setBroadCastAddress(uint8_t addr)
+{
+	writeRegister(REG_BROADCAST_ADDR, addr);
+}
+
 void SPI_Init(void)
 {
 	int ret;
@@ -105,12 +116,12 @@ static uint8_t spi_transfer(int byte_val)
 	ret = ioctl(fd, SPI_IOC_MESSAGE(1), &tr);
 	if (ret < 1)
 		pabort("can't send spi message");
-	for (ret = 0; ret < ARRAY_SIZE(tx); ret++) {
+	/*for (ret = 0; ret < ARRAY_SIZE(tx); ret++) {
 		if (!(ret % 6))
 			puts("");
-		printf("%.2X ", rx[ret]);
-	}
-	puts("");
+		//printf("%.2X ", rx[ret]);
+	}*/
+	//puts("");
 	return rx[0];
 }
 
@@ -169,6 +180,8 @@ void setTxPower(int level)
 
 void setFrequency(long frequency)
 {
+	if (frequency >= 525000000)
+		writeRegister(REG_OP_MODE, readRegister(REG_OP_MODE) & ~(1 << 3)); // Access high frequency mode registers
 	_frequency = frequency;
 	printf("frequency is %ld,%d\n",frequency,_frequency);
 
@@ -489,12 +502,61 @@ void setSyncWord(int sw)
   writeRegister(REG_SYNC_WORD, sw);
 }
 
-void crc()
+void lora_mode_crc_enable()
 {
   writeRegister(REG_MODEM_CONFIG_2, readRegister(REG_MODEM_CONFIG_2) | 0x04);
+}
+
+void fsk_mode_crc_enable()
+{
+  writeRegister(REG_PKT_CFG1, readRegister(REG_PKT_CFG1) | (1 << 4));
 }
 
 void noCrc()
 {
   writeRegister(REG_MODEM_CONFIG_2, readRegister(REG_MODEM_CONFIG_2) & 0xfb);
 }
+
+void enableScrambling()
+{
+  writeRegister(REG_PKT_CFG1, readRegister(REG_PKT_CFG1) | 0x40);
+}
+
+void enableBeacon()
+{
+  writeRegister(REG_PKT_CFG1, readRegister(REG_PKT_CFG1) & ~(1 << 7)); // Switch to fixed length packet format first in order to set beacon
+  writeRegister(REG_PKT_CFG2, readRegister(REG_PKT_CFG2) | (1 << 3));
+}
+
+
+// Frequency hoping
+int set_freq_hop_period(uint8_t freq_hop_period)
+{
+	// hoppingperiod = Ts * Freq_hopping_period
+	writeRegister(REG_HOP_PERIOD, freq_hop_period);
+	return 1;
+}
+
+uint8_t get_fhss_present_channel(void)
+{
+	uint8_t channel = readRegister(REG_HOP_CHANNEL);
+	channel &= FHSS_PRESENT_CHANNEL;
+
+	return channel;
+}
+
+int check_fhss_channel_change(long freq)
+{
+    // pg 32
+    int success = 0;
+	uint8_t irq_reg = readRegister(REG_IRQ_FLAGS);
+	printf("reg_hop_period:%d irq_reg: %x\n", readRegister(REG_HOP_PERIOD), irq_reg);
+	if(irq_reg & IRQ_FHSS_CHANNEL_CHANGE)
+	{
+        setFrequency(freq);
+        writeRegister(REG_IRQ_FLAGS, IRQ_FHSS_CHANNEL_CHANGE);
+        success = 1;
+	}
+    return success;
+}
+
